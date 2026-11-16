@@ -1,0 +1,205 @@
+name: Build yazi-local
+
+on:
+  schedule:
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-yazi-local
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout yazi stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ApexGP/yazi
+          ref: stable
+          path: yazi
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd yazi
+          tag="$(git describe --tags --abbrev=0)"
+          version="${tag#v}"
+          cd ..
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+             && grep -q "version \"$version\"" Formula/yazi-local.rb 2>/dev/null; then
+            build=false
+          else
+            build=true
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$tag version=$version build=$build"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout yazi stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ApexGP/yazi
+          ref: stable
+          path: yazi
+          fetch-depth: 1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        working-directory: yazi
+        run: cargo build --release --locked -p yazi-fm -p yazi-cli
+
+      - name: Package
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp yazi/target/release/yazi dist/
+          cp yazi/target/release/ya dist/
+          asset="yazi-${TAG}-${TARGET}.tar.gz"
+          tar -czf "$asset" -C dist yazi ya
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            shasum -a 256 "$asset" > "$asset.sha256"
+          fi
+          ls -lh "$asset" "$asset.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yazi-${{ matrix.target }}
+          path: |
+            yazi-${{ needs.prepare.outputs.tag }}-${{ matrix.target }}.tar.gz
+            yazi-${{ needs.prepare.outputs.tag }}-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                 --title "yazi $VERSION" --notes "Built from ApexGP/yazi stable"
+          gh release upload "$TAG" artifacts/*.tar.gz artifacts/*.sha256 \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Update formula
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          sha_arm_mac="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-aarch64-apple-darwin.tar.gz.sha256")"
+          sha_x86_mac="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-x86_64-apple-darwin.tar.gz.sha256")"
+          sha_x86_linux="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-x86_64-unknown-linux-gnu.tar.gz.sha256")"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          mkdir -p Formula
+          cat > Formula/yazi-local.rb <<RUBY
+          class YaziLocal < Formula
+            desc "Yazi fork with kitty graphics protocol forwarding for embedded terminals"
+            homepage "https://github.com/ApexGP/yazi"
+            version "$VERSION"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "$base/yazi-${TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "$sha_arm_mac"
+              else
+                url "$base/yazi-${TAG}-x86_64-apple-darwin.tar.gz"
+                sha256 "$sha_x86_mac"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.intel?
+                url "$base/yazi-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "$sha_x86_linux"
+              end
+            end
+
+            def install
+              bin.install "yazi", "ya"
+            end
+
+            def caveats
+              <<~EOS
+                Optional runtime tools are not installed automatically. Install the
+                ones you need, for example: ffmpeg, 7zip, poppler, imagemagick,
+                resvg, fd, ripgrep, fzf, chafa, jq.
+              EOS
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/yazi --version")
+              assert_match version.to_s, shell_output("#{bin}/ya --version")
+            end
+          end
+          RUBY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/yazi-local.rb
+          if git diff --cached --quiet; then
+            echo "formula already up to date"
+          else
+            git commit -m "yazi-local $VERSION"
+            git push origin HEAD:main
+          fi
