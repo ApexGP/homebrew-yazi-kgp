@@ -42,7 +42,8 @@ jobs:
           version="${tag#v}"
           cd ..
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-             && grep -q "version \"$version\"" Formula/yazi-kgp.rb 2>/dev/null; then
+             && grep -q "version \"$version\"" Formula/yazi-kgp.rb 2>/dev/null \
+             && grep -q "\"version\": \"$version\"" bucket/yazi-kgp.json 2>/dev/null; then
             build=false
           else
             build=true
@@ -65,6 +66,8 @@ jobs:
             targets: "aarch64-apple-darwin,x86_64-apple-darwin"
           - os: ubuntu-24.04
             targets: "x86_64-unknown-linux-gnu"
+          - os: windows-latest
+            targets: "x86_64-pc-windows-msvc"
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout yazi stable
@@ -80,7 +83,8 @@ jobs:
         with:
           targets: ${{ matrix.targets }}
 
-      - name: Build
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
         working-directory: yazi
         env:
           TARGETS: ${{ matrix.targets }}
@@ -90,7 +94,13 @@ jobs:
             cargo build --release --locked --target "$target" -p yazi-fm -p yazi-cli
           done
 
-      - name: Package
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        working-directory: yazi
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p yazi-fm -p yazi-cli
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
           TARGETS: ${{ matrix.targets }}
@@ -110,6 +120,22 @@ jobs:
             ls -lh "$asset" "$asset.sha256"
           done
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          $target = "x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "yazi/target/$target/release/yazi.exe" dist/
+          Copy-Item "yazi/target/$target/release/ya.exe" dist/
+          $asset = "yazi-$env:TAG-$target.zip"
+          Compress-Archive -Path "dist/*" -DestinationPath $asset
+          $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset" | Out-File "$asset.sha256" -Encoding ascii
+          Get-Item $asset, "$asset.sha256" | Format-Table Name, Length
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -117,6 +143,7 @@ jobs:
           path: |
             yazi-*.tar.gz
             yazi-*.sha256
+            yazi-*.zip
           if-no-files-found: error
 
   release:
@@ -146,10 +173,10 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
                  --title "yazi $VERSION" --notes "Built from ApexGP/yazi stable"
-          gh release upload "$TAG" artifacts/*.tar.gz artifacts/*.sha256 \
+          gh release upload "$TAG" artifacts/*.tar.gz artifacts/*.zip artifacts/*.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
 
-      - name: Update formula
+      - name: Update package manifests
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -158,6 +185,7 @@ jobs:
           sha_arm_mac="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-aarch64-apple-darwin.tar.gz.sha256")"
           sha_x86_mac="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-x86_64-apple-darwin.tar.gz.sha256")"
           sha_x86_linux="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-x86_64-unknown-linux-gnu.tar.gz.sha256")"
+          sha_win="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-x86_64-pc-windows-msvc.zip.sha256")"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
           mkdir -p Formula
           cat > Formula/yazi-kgp.rb <<RUBY
@@ -202,12 +230,101 @@ jobs:
             end
           end
           RUBY
+          mkdir -p bucket
+          cat > bucket/yazi-kgp.json <<JSON
+          {
+            "version": "$VERSION",
+            "description": "Yazi fork with kitty graphics protocol forwarding for embedded terminals",
+            "homepage": "https://github.com/ApexGP/yazi",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/yazi-${TAG}-x86_64-pc-windows-msvc.zip",
+                "hash": "$sha_win"
+              }
+            },
+            "bin": ["yazi.exe", "ya.exe"]
+          }
+          JSON
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/yazi-kgp.rb
+          git add Formula/yazi-kgp.rb bucket/yazi-kgp.json
           if git diff --cached --quiet; then
-            echo "formula already up to date"
+            echo "manifests already up to date"
           else
             git commit -m "yazi-kgp $VERSION"
             git push origin HEAD:main
           fi
+
+  packages:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: yazi-ubuntu-24.04
+          path: /tmp/pkg
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils zstd
+
+      - name: Build apt and pacman packages
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd /tmp/pkg
+          tar -xzf yazi-*.tar.gz
+          mkdir -p "$GITHUB_WORKSPACE/packages/pacman/x86_64"
+          mkdir -p "$GITHUB_WORKSPACE/packages/apt/pool/main"
+          mkdir -p "$GITHUB_WORKSPACE/packages/apt/dists/stable/main/binary-amd64"
+
+          debroot=/tmp/deb
+          mkdir -p "$debroot/DEBIAN" "$debroot/usr/bin"
+          cp yazi ya "$debroot/usr/bin/"
+          cat > "$debroot/DEBIAN/control" <<EOF
+          Package: yazi-kgp
+          Version: $VERSION
+          Architecture: amd64
+          Maintainer: ApexGP
+          Description: Yazi fork with kitty graphics protocol forwarding
+          License: MIT
+          EOF
+          dpkg-deb --build "$debroot" "$GITHUB_WORKSPACE/packages/apt/pool/main/yazi-kgp_${VERSION}_amd64.deb"
+          cd "$GITHUB_WORKSPACE/packages/apt"
+          apt-ftparchive packages pool/main > dists/stable/main/binary-amd64/Packages
+          apt-ftparchive release dists/stable > dists/stable/Release
+
+          pkgroot=/tmp/pacman
+          mkdir -p "$pkgroot/usr/bin"
+          cp /tmp/pkg/yazi /tmp/pkg/ya "$pkgroot/usr/bin/"
+          size="$(du -sb "$pkgroot" | cut -f1)"
+          cat > "$pkgroot/.PKGINFO" <<EOF
+          pkgname = yazi-kgp
+          pkgver = ${VERSION}-1
+          pkgdesc = Yazi fork with kitty graphics protocol forwarding
+          url = https://github.com/ApexGP/yazi
+          builddate = $(date +%s)
+          packager = ApexGP
+          size = $size
+          arch = x86_64
+          license = MIT
+          EOF
+          tar --zstd -cf "$GITHUB_WORKSPACE/packages/pacman/x86_64/yazi-kgp-${VERSION}-1-x86_64.pkg.tar.zst" -C "$pkgroot" .PKGINFO usr
+          docker run --rm -v "$GITHUB_WORKSPACE/packages/pacman/x86_64:/repo" archlinux:latest \
+            bash -c 'pacman -Sy --noconfirm >/dev/null && repo-add /repo/yazi-kgp.db.tar.gz /repo/*.pkg.tar.zst'
+
+      - name: Publish packages to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./packages
+          publish_branch: gh-pages
+          force_orphan: true
