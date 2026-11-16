@@ -1,4 +1,4 @@
-name: Build yazi-local
+name: Build yazi-kgp
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-yazi-local
+  group: build-yazi-kgp
   cancel-in-progress: false
 
 jobs:
@@ -42,7 +42,7 @@ jobs:
           version="${tag#v}"
           cd ..
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-             && grep -q "version \"$version\"" Formula/yazi-local.rb 2>/dev/null; then
+             && grep -q "version \"$version\"" Formula/yazi-kgp.rb 2>/dev/null; then
             build=false
           else
             build=true
@@ -160,8 +160,8 @@ jobs:
           sha_x86_linux="$(cut -d' ' -f1 "artifacts/yazi-${TAG}-x86_64-unknown-linux-gnu.tar.gz.sha256")"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
           mkdir -p Formula
-          cat > Formula/yazi-local.rb <<RUBY
-          class YaziLocal < Formula
+          cat > Formula/yazi-kgp.rb <<RUBY
+          class YaziKgp < Formula
             desc "Yazi fork with kitty graphics protocol forwarding for embedded terminals"
             homepage "https://github.com/ApexGP/yazi"
             version "$VERSION"
@@ -204,10 +204,10 @@ jobs:
           RUBY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/yazi-local.rb
+          git add Formula/yazi-kgp.rb
           if git diff --cached --quiet; then
             echo "formula already up to date"
           else
-            git commit -m "yazi-local $VERSION"
+            git commit -m "yazi-kgp $VERSION"
             git push origin HEAD:main
           fi
