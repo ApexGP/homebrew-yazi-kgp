@@ -1,0 +1,13 @@
+{
+  "version": "26.9.1",
+  "description": "Yazi fork with kitty graphics protocol forwarding for embedded terminals",
+  "homepage": "https://github.com/ApexGP/yazi",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/ApexGP/homebrew-yazi-kgp/releases/download/v26.9.1/yazi-v26.9.1-x86_64-pc-windows-msvc.zip",
+      "hash": "17ca77264002817da5d79683e8782d967ccaeba78f4e1aae977bd8fb770749f1"
+    }
+  },
+  "bin": ["yazi.exe", "ya.exe"]
+}

@@ -7,17 +7,17 @@ class YaziKgp < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/ApexGP/homebrew-yazi-kgp/releases/download/v26.9.1/yazi-v26.9.1-aarch64-apple-darwin.tar.gz"
-      sha256 "cc92cbe8bf64661e4e205dbb3250e517dd22f999bfe99e1b7c51d6f65ad2fb56"
+      sha256 "d622def6c789e972dfc8537a45744bbc65660cfe1418e6dc4dae2d8f9e270bfc"
     else
       url "https://github.com/ApexGP/homebrew-yazi-kgp/releases/download/v26.9.1/yazi-v26.9.1-x86_64-apple-darwin.tar.gz"
-      sha256 "f7f9ffddf726b3bb8904c213623b35a42bea7ab0e6eaf15e77712a623e788275"
+      sha256 "393c556910c99ee285d699c97a196e8630ea04c1f6a2494d1fc21933d4a77983"
     end
   end
 
   on_linux do
     if Hardware::CPU.intel?
       url "https://github.com/ApexGP/homebrew-yazi-kgp/releases/download/v26.9.1/yazi-v26.9.1-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "c338bae09c3f443eb2b034a1edf502315f02c42736c29ef1b599321289dbb383"
+      sha256 "6dce90c377df23d4ed2e2ec58a494ca02e7a8ad656ad244ebc469e6ca0646f56"
     end
   end
 
