@@ -1,0 +1,13 @@
+Package: yazi-kgp
+Architecture: amd64
+Version: 26.9.1
+Maintainer: ApexGP
+Filename: pool/main/yazi-kgp_26.9.1_amd64.deb
+Size: 11680960
+MD5sum: 80a9ce2cc7d1f13303a68cd4fbdd8fc5
+SHA1: 9e02e55c6a64de226f195fd99d14564a89468c0c
+SHA256: 3b6844954f0feb72bc32cd4b9e3ec31e1669de099764f8460a820cd6ff294e05
+SHA512: dc1127fa2cc15a2be2b6d97d973d7866d479b75a155e5bf9bf38dd21df70ad0dc48f22453a036cecfa64acc2aae56c9dac677d549163ef51adc3debeee68d8c9
+Description: Yazi fork with kitty graphics protocol forwarding
+License: MIT
+
