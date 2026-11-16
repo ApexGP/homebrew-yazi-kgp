@@ -61,12 +61,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13
-            target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
+          - os: macos-15
+            targets: "aarch64-apple-darwin,x86_64-apple-darwin"
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            targets: "x86_64-unknown-linux-gnu"
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout yazi stable
@@ -80,37 +78,45 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.targets }}
 
       - name: Build
         working-directory: yazi
-        run: cargo build --release --locked --target "${{ matrix.target }}" -p yazi-fm -p yazi-cli
+        env:
+          TARGETS: ${{ matrix.targets }}
+        run: |
+          set -euo pipefail
+          for target in ${TARGETS//,/ }; do
+            cargo build --release --locked --target "$target" -p yazi-fm -p yazi-cli
+          done
 
       - name: Package
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
-          TARGET: ${{ matrix.target }}
+          TARGETS: ${{ matrix.targets }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-          cp "yazi/target/${TARGET}/release/yazi" dist/
-          cp "yazi/target/${TARGET}/release/ya" dist/
-          asset="yazi-${TAG}-${TARGET}.tar.gz"
-          tar -czf "$asset" -C dist yazi ya
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$asset" > "$asset.sha256"
-          else
-            shasum -a 256 "$asset" > "$asset.sha256"
-          fi
-          ls -lh "$asset" "$asset.sha256"
+          for target in ${TARGETS//,/ }; do
+            mkdir -p "dist-$target"
+            cp "yazi/target/$target/release/yazi" "dist-$target/"
+            cp "yazi/target/$target/release/ya" "dist-$target/"
+            asset="yazi-${TAG}-${target}.tar.gz"
+            tar -czf "$asset" -C "dist-$target" yazi ya
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$asset" > "$asset.sha256"
+            else
+              shasum -a 256 "$asset" > "$asset.sha256"
+            fi
+            ls -lh "$asset" "$asset.sha256"
+          done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: yazi-${{ matrix.target }}
+          name: yazi-${{ matrix.os }}
           path: |
-            yazi-${{ needs.prepare.outputs.tag }}-${{ matrix.target }}.tar.gz
-            yazi-${{ needs.prepare.outputs.tag }}-${{ matrix.target }}.tar.gz.sha256
+            yazi-*.tar.gz
+            yazi-*.sha256
           if-no-files-found: error
 
   release:
